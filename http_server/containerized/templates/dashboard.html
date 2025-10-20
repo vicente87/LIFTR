@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TinyFaaS Admin Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }
+        h1, h2 { color: #0056b3; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
+        .status-box { padding: 10px; margin-bottom: 20px; border-radius: 5px; background-color: #e6f7ff; border: 1px solid #b3e0ff; }
+        /* Estilos del Formulario de Adquisición mejorados */
+        .form-group { margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #333; }
+        input[type="text"], input[type="file"], button { padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #ccc; width: calc(100% - 10px); box-sizing: border-box; }
+        input[type="file"] { width: auto; } /* Archivos no necesitan 100% */
+        button { background-color: #007bff; color: white; cursor: pointer; border: none; margin-right: 5px; width: auto; }
+        button:hover { background-color: #0056b3; }
+        .btn-delete { background-color: #dc3545; }
+        .btn-delete:hover { background-color: #c82333; }
+        .btn-logs { background-color: #28a745; }
+        .btn-logs:hover { background-color: #1e7e34; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        /* Estilos de la Consola */
+        #console-output {
+            background-color: #1e1e1e;
+            color: #00ff41;
+            padding: 15px;
+            height: 250px;
+            overflow-y: scroll;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            white-space: pre-wrap;
+            margin-top: 20px;
+            border: 1px solid #333;
+        }
+        .console-entry { border-bottom: 1px solid #333; padding-bottom: 5px; margin-bottom: 5px; }
+        .console-entry.success { color: #00ff41; }
+        .console-entry.error { color: #ff3333; }
+        .console-entry.warning { color: #ffdd00; }
+        .console-entry.info { color: #cccccc; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Administración de TinyFaaS</h1>
+
+    <div class="status-box" id="server-status">Cargando estado...</div>
+
+    <h2>Desplegar Nueva Función</h2>
+    <form id="upload-form">
+        <div class="form-group">
+            <label for="name">Nombre de la Función (Opcional):</label>
+            <input type="text" id="name" name="name" placeholder="ej. mi_funcion_calculadora" title="Si se deja vacío, se usa el nombre del archivo.">
+        </div>
+
+        <div class="form-group">
+            <label for="code">Archivo de Código (Obligatorio, debe tener 'def main(*args)'):</label>
+            <input type="file" id="code" name="code" accept=".py" required>
+        </div>
+
+        <div class="form-group">
+            <label for="requirements">Archivo de Requisitos (Opcional, requirements.txt):</label>
+            <input type="file" id="requirements" name="requirements" accept=".txt">
+        </div>
+
+        <button type="submit">Desplegar Función</button>
+    </form>
+
+    <h2>Funciones Desplegadas</h2>
+    <table id="functions-table">
+        <thead>
+            <tr>
+                <th>Nombre</th>
+                <th>Fecha Despliegue</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody id="functions-list">
+            </tbody>
+    </table>
+
+    <h2 style="margin-top: 40px;">Consola de Operaciones</h2>
+    <div id="console-output">
+        Listo para operar.
+    </div>
+
+</div>
+
+<script>
+    // Configuración de Autenticación (Debe coincidir con el servidor)
+    const ADMIN_USER = 'admin';
+    const ADMIN_PASS = '1234';
+    const authHeader = 'Basic ' + btoa(`${ADMIN_USER}:${ADMIN_PASS}`);
+    const consoleOutput = document.getElementById('console-output');
+
+    document.addEventListener('DOMContentLoaded', () => {
+         getServerStatus();
+        listFunctions();
+        document.getElementById('upload-form').addEventListener('submit', handleUpload);
+        
+        // 🚀 INICIO DE LA ACTUALIZACIÓN AUTOMÁTICA DEL ESTADO DEL SERVIDOR 🚀
+        // 5 minutos = 300,000 milisegundos
+        const intervalTimeMs = 5 * 60 * 1000; 
+        
+        console.log(`[INFO] La actualización automática del estado del servidor (CPU/RAM/Uptime) está activa cada ${intervalTimeMs / 1000 / 60} minutos.`);
+        
+        setInterval(getServerStatus, intervalTimeMs);
+    });
+    
+    // =======================================================
+    // CONSOLA: Muestra mensajes de operación en el HTML
+    // =======================================================
+    function logToConsole(message, type = 'info', funcName = '', operation = '') { 
+        const timestamp = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `console-entry ${type}`;
+        
+        const namePrefix = funcName ? `[${funcName}] ` : '';
+        const opPrefix = operation ? `<${operation}> ` : ''; 
+        
+        // Formatear el mensaje como JSON indentado si es un objeto
+        const logMessage = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
+        
+        entry.textContent = `[${timestamp}] ${opPrefix}${namePrefix}${logMessage}`; 
+        
+        consoleOutput.prepend(entry); 
+        // Limitar el tamaño de la consola
+        while (consoleOutput.children.length > 100) {
+            consoleOutput.removeChild(consoleOutput.lastChild);
+        }
+    }
+
+
+    // =======================================================
+    // 1. GESTIÓN DEL ESTADO DEL SERVIDOR
+    // =======================================================
+    function getServerStatus() {
+        fetch('/admin/status', {
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => response.json())
+        .then(data => {
+            const statusBox = document.getElementById('server-status');
+            statusBox.innerHTML = `
+                Estado del Servidor: <strong>${data.status.toUpperCase()}</strong> | 
+                Uptime: ${data.uptime} | 
+                CPU: ${data.cpu_percent}% | 
+                RAM: <strong>${data.ram_percent}%</strong> | 
+                Funciones Cargadas: <strong>${data.loaded_functions}</strong>
+            `;
+            statusBox.style.backgroundColor = data.status === 'ok' ? '#e6f7ff' : '#fff0f6';
+            logToConsole(`Estado del servidor actualizado: CPU ${data.cpu_percent}%, RAM ${data.ram_percent}%`, 'info', '', 'SERVER_STATUS_OK');
+        })
+        .catch(error => {
+            logToConsole('Error al obtener estado del servidor. Revise la conexión.', 'error', '', 'SERVER_STATUS_ERROR');
+            document.getElementById('server-status').textContent = 'Error al conectar con el servidor.';
+        });
+    }
+
+    // =======================================================
+    // 2. DESPLIEGUE DE FUNCIONES (Upload)
+    // =======================================================
+    function handleUpload(event) {
+        event.preventDefault();
+        
+        const form = document.getElementById('upload-form');
+        const formData = new FormData(form);
+        logToConsole('Iniciando despliegue. Puede tardar si hay dependencias...', 'info', '', 'DEPLOY');
+
+        fetch('/admin/upload', {
+            method: 'POST',
+            headers: { 'Authorization': authHeader },
+            body: formData
+        })
+        .then(response => response.json().then(data => {
+            if (!response.ok) {
+                throw new Error(data.message || `Error ${response.status} en la API.`);
+            }
+            return data;
+        }))
+        .then(data => {
+            logToConsole(`Éxito: ${data.message}`, 'success', '', 'DEPLOY_RESULT');
+            form.reset();
+            listFunctions(); 
+            getServerStatus(); 
+        })
+        .catch(error => {
+            logToConsole(`Fallo al desplegar: ${error.message}`, 'error', '', 'DEPLOY_ERROR');
+            console.error('Error de Despliegue:', error);
+        });
+    }
+
+    // =======================================================
+    // 3. LISTADO, ELIMINACIÓN e INVOCACIÓN
+    // =======================================================
+    function listFunctions() {
+        fetch('/admin/functions', {
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => response.json())
+        .then(functions => {
+            const funcListBody = document.getElementById('functions-list');
+            funcListBody.innerHTML = ''; 
+
+            for (const name in functions) {
+                const data = functions[name];
+                const row = funcListBody.insertRow();
+                
+                row.insertCell().textContent = name;
+                row.insertCell().textContent = data.created_at;
+                
+                const actionsCell = row.insertCell();
+
+                // Botón Invocar
+                const invokeBtn = document.createElement('button');
+                invokeBtn.textContent = 'Invocar (POST)';
+                invokeBtn.title = 'Requiere enviar JSON con {"args": [...]}';
+                invokeBtn.onclick = () => invokeFunction(name);
+                actionsCell.appendChild(invokeBtn);
+                
+                // Botón Ver Logs
+                const logsBtn = document.createElement('button');
+                logsBtn.textContent = 'Ver Logs';
+                logsBtn.className = 'btn-logs'; 
+                logsBtn.onclick = () => showLogs(name); 
+                actionsCell.appendChild(logsBtn);
+
+                // Botón Borrar
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = 'Borrar';
+                deleteBtn.className = 'btn-delete';
+                deleteBtn.onclick = () => deleteFunction(name);
+                actionsCell.appendChild(deleteBtn);
+            }
+        })
+        .catch(error => logToConsole(`Error al listar funciones: ${error.message}`, 'error', '', 'LIST_ERROR'));
+    }
+
+    function deleteFunction(funcName) {
+        if (!confirm(`¿Estás seguro de que quieres borrar la función: ${funcName}?`)) {
+            return;
+        }
+
+        fetch(`/admin/functions/${funcName}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => {
+            if (response.ok) {
+                logToConsole(`Función ${funcName} eliminada con éxito.`, 'success', funcName, 'DELETE_RESULT');
+                listFunctions(); 
+                getServerStatus();
+            } else {
+                return response.json().then(data => {
+                    logToConsole(`Error al eliminar: ${data.message || response.statusText}`, 'error', funcName, 'DELETE_ERROR');
+                });
+            }
+        })
+        .catch(error => logToConsole(`Error de conexión al eliminar: ${error.message}`, 'error', funcName, 'DELETE_ERROR'));
+    }
+    
+    // Función de invocación (CORREGIDA PARA ALERTA)
+    function invokeFunction(funcName) {
+        const argsInput = prompt(`Introduce los argumentos para ${funcName} (separados por comas, ej: 10,20,"hola"):`);
+        if (argsInput === null) return;
+
+        const argsArray = argsInput.split(',').map(s => s.trim()).filter(s => s.length > 0);
+        
+        const processedArgs = argsArray.map(arg => {
+            const num = Number(arg);
+            return isNaN(num) ? arg.replace(/^["']|["']$/g, '') : num;
+        });
+        
+        logToConsole({ action: "Invocando", args: processedArgs }, 'info', funcName, 'INVOKE'); 
+
+        fetch(`/function/${funcName}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ args: processedArgs })
+        })
+        .then(response => response.json())
+        .then(data => {
+            let logType = data.status === 'success' ? 'success' : 'error';
+            
+            // 🚀 CORRECCIÓN CLAVE: Mostrar la respuesta completa de la API en la alerta.
+            alert(`Respuesta completa de la API para ${funcName}:\n\n` + JSON.stringify(data, null, 2));
+
+            logToConsole(data, logType, funcName, 'INVOKE_RESULT'); 
+        })
+        .catch(error => {
+            logToConsole(`Error de conexión al invocar: ${error.message}`, 'error', funcName, 'INVOKE_ERROR');
+            alert('Error al invocar la función. Revisa la consola y la conexión.');
+        });
+    }
+
+    // =======================================================
+    // 4. FUNCIÓN PARA MOSTRAR LOGS (CORREGIDA PARA ALERTA)
+    // =======================================================
+
+    function showLogs(funcName) {
+        const apiUrl = `/admin/logs/${funcName}`;
+        logToConsole(`Solicitando logs...`, 'info', funcName, 'LOGS_FETCH'); 
+
+        fetch(apiUrl, {
+            method: 'GET',
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(data => {
+                    throw new Error(data.message || `Error ${response.status} en la API.`);
+                });
+            }
+            return response.json();
+        })
+        .then(logs => {
+            displayLogs(funcName, logs);
+        })
+        .catch(error => {
+            logToConsole(`Fallo al obtener logs: ${error.message}`, 'error', funcName, 'LOGS_ERROR'); 
+            alert('Error al obtener los logs: ' + error.message);
+        });
+    }
+
+    function displayLogs(funcName, logs) {
+        if (logs.status === 'error' || logs.length === 0) {
+            logToConsole(`No se encontraron logs de ejecución.`, 'warning', funcName, 'LOGS_RESULT');
+            alert(`Logs para "${funcName}": No se encontraron logs de ejecución.`);
+            return;
+        }
+
+        let logContent = `Logs completos de la API para: ${funcName}\n\n`;
+        const recentLogs = logs.slice(-5); 
+        
+        logToConsole(`Logs recibidos (${recentLogs.length} recientes)`, 'info', funcName, 'LOGS_RESULT');
+
+        recentLogs.forEach((entry, index) => {
+            // 🚀 CORRECCIÓN CLAVE: Construir la alerta con el objeto completo (entry) de la API.
+            logContent += `--- Ejecución #${logs.length - recentLogs.length + index + 1} ---\n`;
+            logContent += JSON.stringify(entry, null, 2);
+            logContent += '\n\n';
+
+            // Log a la consola (mantiene el formato JSON indentado)
+            const logType = entry.status === 'success' ? 'success' : 'error';
+            logToConsole(entry, logType, funcName, 'LOG_ENTRY'); 
+        });
+
+        // 🚀 CORRECCIÓN FINAL: Mostrar el contenido sin más procesamiento.
+        alert(logContent);
+    }
+</script>
+
+</body>
+</html>
