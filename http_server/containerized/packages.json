@@ -1,0 +1,4 @@
+{
+    "common_python_packages": "matplotlib scikit-learn ipython numpy scikit-image requests beautifulsoup4 scipy pandas",
+    "common_node_packages": "express lodash axios moment dotenv"
+}
