@@ -3,14 +3,59 @@ import tarfile
 import urllib.request
 import subprocess
 from pathlib import Path
+import json 
+import pwd, grp 
+import shutil 
+import sys 
 
-# === CONFIGURACIÓN ===
-BASE_DIR = Path.home() / "faas-lab"
+# === CONFIGURACIÓN (RUTAS CORREGIDAS PARA SUDO) ===
+# Determinar la ruta base, usando SUDO_USER si se está ejecutando con sudo
+if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+    try:
+        user_info = pwd.getpwnam(os.environ['SUDO_USER'])
+        user_home = Path(user_info.pw_dir)
+    except KeyError:
+        # Fallback si SUDO_USER no está disponible
+        user_home = Path.home()
+else:
+    user_home = Path.home()
+
+BASE_DIR = user_home / "faas-lab"
 ROOTFS_DIR = BASE_DIR / "rootfs"
-ARCH = "x86_64"  # usa "aarch64" si es Raspberry Pi
+
+ARCH = "x86_64"
 ALPINE_VERSION = "3.20.0"
 ROOTFS_URL = f"https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/{ARCH}/alpine-minirootfs-{ALPINE_VERSION}-{ARCH}.tar.gz"
 TAR_PATH = BASE_DIR / f"alpine-minirootfs-{ALPINE_VERSION}-{ARCH}.tar.gz"
+
+PACKAGES_CONFIG_FILE = Path("packages.json")
+
+COMMON_PYTHON_PACKAGES = ""
+COMMON_NODE_PACKAGES = ""
+
+def load_package_config():
+    """Carga la lista de paquetes desde packages.json."""
+    global COMMON_PYTHON_PACKAGES, COMMON_NODE_PACKAGES
+    try:
+        if not PACKAGES_CONFIG_FILE.exists():
+            print(f"🚨 Error: Archivo de configuración de paquetes no encontrado en {PACKAGES_CONFIG_FILE}.")
+            sys.exit(1) 
+
+        with open(PACKAGES_CONFIG_FILE, 'r') as f:
+            try:
+                config = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"❌ Error de formato en packages.json: {e}")
+                sys.exit(1)
+                
+            COMMON_PYTHON_PACKAGES = config.get("common_python_packages", "")
+            COMMON_NODE_PACKAGES = config.get("common_node_packages", "")
+        print("✅ Configuración de paquetes cargada exitosamente.")
+
+    except Exception as e:
+        print(f"❌ Error al cargar la configuración de paquetes: {e}. Abortando.")
+        sys.exit(1)
+
 
 def download_rootfs():
     """Descarga el minirootfs de Alpine"""
@@ -24,141 +69,147 @@ def download_rootfs():
 
 def extract_rootfs():
     """Extrae el rootfs en la carpeta destino"""
+    # Solo extraemos si el directorio está vacío o no existe
     if ROOTFS_DIR.exists() and any(ROOTFS_DIR.iterdir()):
         print("📂 El rootfs ya existe, omitiendo extracción.")
         return
     print(f"📦 Extrayendo rootfs en {ROOTFS_DIR} ...")
     ROOTFS_DIR.mkdir(parents=True, exist_ok=True)
     with tarfile.open(TAR_PATH, "r:gz") as tar:
-        tar.extractall(path=ROOTFS_DIR)
+        tar.extractall(ROOTFS_DIR)
     print("✅ Extracción completada.")
 
-def install_packages():
-    """Instala Python, Node.js y GCC dentro del rootfs"""
-    print("⚙️ Instalando Python, Node.js y GCC dentro del rootfs...")
-
-    subprocess.run(["sudo", "mount", "-t", "proc", "proc", f"{ROOTFS_DIR}/proc"])
-    subprocess.run(["sudo", "mount", "-t", "sysfs", "sys", f"{ROOTFS_DIR}/sys"])
-    subprocess.run(["sudo", "mount", "--bind", "/dev", f"{ROOTFS_DIR}/dev"])
-
-    # 👇 Agrega esta línea
-    subprocess.run(["sudo", "cp", "/etc/resolv.conf", f"{ROOTFS_DIR}/etc/resolv.conf"])
-
+def setup_network_for_chroot():
+    """Copia el /etc/resolv.conf del host al rootfs para permitir la resolución de DNS."""
+    resolv_conf_host = Path("/etc/resolv.conf")
+    resolv_conf_rootfs = ROOTFS_DIR / "etc" / "resolv.conf"
+    
+    print("🌐 Configurando DNS en el rootfs...")
     try:
-        subprocess.run([
-            "sudo", "chroot", str(ROOTFS_DIR),
-            "sh", "-c",
-            "apk update && apk add --no-cache python3 py3-pip nodejs npm gcc musl-dev bash curl"
-        ], check=True)
-    finally:
-        subprocess.run(["sudo", "umount", f"{ROOTFS_DIR}/proc"], stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "umount", f"{ROOTFS_DIR}/sys"], stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "umount", f"{ROOTFS_DIR}/dev"], stderr=subprocess.DEVNULL)
+        shutil.copy(resolv_conf_host, resolv_conf_rootfs)
+        print("✅ /etc/resolv.conf copiado. La red debería funcionar ahora.")
+    except Exception as e:
+        print(f"⚠️ Error al copiar /etc/resolv.conf: {e}. La instalación puede fallar.")
 
-    print("✅ Paquetes instalados correctamente.")
 
+def install_packages():
+    """Instala las herramientas y dependencias de lenguaje dentro del rootfs usando chroot."""
+    print("🛠️ Instalando paquetes de sistema (apk)...")
+    
+    # 1. Instalar paquetes esenciales de Alpine
+    # 🔴 CORRECCIÓN: Se añade g++ (compilador C++)
+    packages = "python3 py3-pip python3-dev nodejs npm gcc g++ libc-dev" 
+    apk_cmd = f"apk add --no-cache {packages}"
+    
+    subprocess.run(["chroot", ROOTFS_DIR.as_posix(), "sh", "-c", "apk update"], check=True)
+    subprocess.run(["chroot", ROOTFS_DIR.as_posix(), "sh", "-c", apk_cmd], check=True)
+    
+    # 2. INSTALACIÓN DE PAQUETES PYTHON MONOLÍTICOS
+    if COMMON_PYTHON_PACKAGES:
+        print("📦 Instalando paquetes comunes de Python (pip)...")
+        # Corrección para PEP 668: Usar --break-system-packages
+        pip_install_cmd = f"python3 -m pip install --break-system-packages {COMMON_PYTHON_PACKAGES}"
+        subprocess.run(["chroot", ROOTFS_DIR.as_posix(), "sh", "-c", pip_install_cmd], check=True)
+    else:
+        print("⚠️ Saltando instalación de paquetes Python (lista vacía).")
+    
+    # 3. INSTALACIÓN DE PAQUETES NODE.JS MONOLÍTICOS
+    if COMMON_NODE_PACKAGES:
+        print("📦 Instalando paquetes comunes de Node.js (npm)...")
+        npm_install_cmd = f"npm install -g --prefix /usr/local {COMMON_NODE_PACKAGES}"
+        subprocess.run(["chroot", ROOTFS_DIR.as_posix(), "sh", "-c", npm_install_cmd], check=True)
+    else:
+        print("⚠️ Saltando instalación de paquetes Node.js (lista vacía).")
+    
+    print("✅ Instalación de lenguajes y librerías comunes completada.")
 
 def clean_rootfs():
-    """Limpia archivos innecesarios para reducir tamaño"""
-    print("🧹 Limpiando archivos innecesarios...")
-    cleanup_paths = [
-        "var/cache/apk", "usr/share/man", "usr/share/doc", "usr/share/locale"
-    ]
-    for path in cleanup_paths:
-        full_path = ROOTFS_DIR / path
-        if full_path.exists():
-            subprocess.run(["sudo", "rm", "-rf", str(full_path)])
+    """Limpia el rootfs eliminando la caché de apk y archivos temporales."""
+    print("🧹 Limpiando el rootfs...")
+    # Corrección: Se reemplaza 'apk cache --wipe' por 'apk cache clean'
+    subprocess.run(["chroot", ROOTFS_DIR.as_posix(), "apk", "cache", "clean"], check=True)
+    # Elimina archivos de caché grandes fuera del chroot
+    subprocess.run(["rm", "-rf", ROOTFS_DIR / "root/.cache"], check=False)
+    subprocess.run(["rm", "-rf", ROOTFS_DIR / "usr/local/lib/node_modules/npm/node_modules"], check=False)
     print("✅ Limpieza completada.")
-
-def main():
-    print("🚀 Construyendo rootfs multilenguaje (Python, Node.js, C)...\n")
-    download_rootfs()
-    extract_rootfs()
-    install_packages()
-    clean_rootfs()
-
-    print("\n🎉 Rootfs listo para usar con crun o runC.")
-    print(f"📂 Ubicación: {ROOTFS_DIR}")
-    print("💡 Puedes probarlo con: python3 faas_launcher.py --func ./functions/sum.py --args '5 7'")
-# (Añade esta función en algún lugar del archivo build_rootfs_local.py)
-
 def create_oci_config():
-    """Genera el config.json estándar usando crun spec."""
-    print("⚙️ Generando archivo config.json (OCI spec)...")
+    """Crea un config.json base y lo modifica para la ejecución rootless."""
+    print("⚙️ Generando config.json para OCI...")
     
-    # 1. Crear el config.json base
-    try:
-        # crun spec crea un archivo config.json en el directorio actual.
-        subprocess.run(["crun", "spec"], check=True, cwd=str(ROOTFS_DIR))
-    except FileNotFoundError:
-        # Esto ocurre si crun no está en el PATH
-        print("❌ Error: crun no se encontró. Asegúrate de que crun está instalado y en el PATH.")
-        return
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error al ejecutar crun spec: {e.stderr}")
-        return
-
-    # 2. Modificar el config.json para que apunte al rootfs y active las capacidades.
     config_path = ROOTFS_DIR / "config.json"
+    
+    if not config_path.exists():
+        print("🚨 Generando config.json base con runc...")
+        original_cwd = Path.cwd()
+        os.chdir(ROOTFS_DIR)
+        # runc spec --rootless debe ejecutarse desde el directorio del bundle (rootfs)
+        subprocess.run(["runc", "spec", "--rootless"], check=True)
+        os.chdir(original_cwd)
+    
     with open(config_path, 'r') as f:
         config = json.load(f)
 
-    # El rootfs debe apuntar a la carpeta 'rootfs' (que es el directorio actual)
-    config['root']['path'] = 'rootfs'
+    # Obtenemos el UID/GID del usuario que invocó 'sudo' (vrodben1) para los mappings
+    current_uid = os.getuid()
+    current_gid = os.getgid()
     
-    # Configuramos el proceso para que use bash por defecto (lo usaremos para sh -c)
-    config['process']['args'] = ["/bin/bash"]
-    
-    # Añadir los mapeos de subuid/subgid al config.json (necesario para Rootless)
-    # Estos valores se obtienen del sistema.
-    import pwd, grp
-    username = os.getlogin()
-    
-    # Lee el mapeo del sistema (asumiendo que ya lo configuraste)
-    def get_id_map(path):
+    if os.environ.get("SUDO_USER"):
         try:
-            with open(path, 'r') as f:
-                for line in f:
-                    parts = line.strip().split(':')
-                    if parts[0] == username:
-                        return [{"containerID": 0, "hostID": int(parts[1]), "size": int(parts[2])}]
-            return []
-        except:
-            return []
+            user_info = pwd.getpwnam(os.environ['SUDO_USER'])
+            uid = user_info.pw_uid
+            gid = user_info.pw_gid
+        except KeyError:
+            uid = current_uid
+            gid = current_gid
+    else:
+        uid = current_uid
+        gid = current_gid
 
-    config['linux']['uidMappings'] = get_id_map("/etc/subuid")
-    config['linux']['gidMappings'] = get_id_map("/etc/subgid")
+
+    config['process']['user']['uid'] = uid
+    config['process']['user']['gid'] = gid
     
-    # Para el modo Rootless, debemos eliminar o modificar las capacidades sensibles
-    # Eliminamos las capacidades sensibles si están presentes (crun lo necesita)
+    config['linux']['uidMappings'] = [
+        {"hostID": uid, "containerID": uid, "size": 1}
+    ]
+    config['linux']['gidMappings'] = [
+        {"hostID": gid, "containerID": gid, "size": 1}
+    ]
+    
+    # Asegurar la existencia de las capacidades
     config['process']['capabilities']['bounding'] = config['process']['capabilities'].get('bounding', [])
     config['process']['capabilities']['effective'] = config['process']['capabilities'].get('effective', [])
     config['process']['capabilities']['inheritable'] = config['process']['capabilities'].get('inheritable', [])
     config['process']['capabilities']['permitted'] = config['process']['capabilities'].get('permitted', [])
     config['process']['capabilities']['ambient'] = config['process']['capabilities'].get('ambient', [])
 
-    # Añadimos las variables de entorno para que Python y Node funcionen
-    config['process']['env'].append("PYTHONPATH=/usr/lib/python3.12/site-packages")
+    # Añadimos la variable de entorno para que Python encuentre los paquetes monolíticos
+    # 3.12.12 es la versión que instala Alpine 3.20
+    config['process']['env'].append("PYTHONPATH=/usr/lib/python3.12/site-packages:/usr/local/lib/python3.12/site-packages")
     
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=4)
         
     print("✅ config.json generado y modificado para ejecución Rootless.")
 
-
-# (Modifica la función main() para llamar a create_oci_config)
 def main():
-    print("🚀 Construyendo rootfs multilenguaje (Python, Node.js, C)...\n")
-    download_rootfs()
+    print("🚀 Construyendo rootfs monolítico (Python, Node.js, C)...\\n")
+    
+    skip_download = "--skip-download" in sys.argv
+    
+    load_package_config() 
+    
+    if not skip_download:
+        download_rootfs()
+    else:
+        print("⚠️ Omitiendo descarga de rootfs (bandera --skip-download detectada).")
+        
     extract_rootfs()
-    install_packages()
+    setup_network_for_chroot()
+    install_packages() 
     clean_rootfs()
-    create_oci_config() # ⬅️ AÑADE ESTA LLAMADA AQUÍ
+    create_oci_config()
     print(f"\n✅ ¡Rootfs completado! Listo para ejecutar desde: {ROOTFS_DIR}")
-
-# (Asegúrate de importar las librerías necesarias en build_rootfs_local.py)
-import json
-import pwd, grp
 
 
 if __name__ == "__main__":
