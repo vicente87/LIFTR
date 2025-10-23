@@ -14,7 +14,8 @@ import traceback
 from pathlib import Path
 import tempfile 
 import atexit 
-from dotenv import load_dotenv # Añadido para cargar variables de entorno
+from dotenv import load_dotenv 
+import threading # 👈 ¡NUEVO! Para la ejecución asíncrona
 
 # Cargar variables de entorno si existe un archivo .env
 load_dotenv()
@@ -27,7 +28,6 @@ CORS(app)
 # ========================================================
 USERNAME = os.environ.get("FAAS_USERNAME", "admin")
 PASSWORD = os.environ.get("FAAS_PASSWORD", "1234")
-# ... (el resto de las funciones de autenticación)
 
 def check_auth(username, password):
     return username == USERNAME and password == PASSWORD
@@ -71,10 +71,12 @@ CRUN_BIN = shutil.which("crun") or "/usr/bin/crun"
 # 🟢 Archivo de configuración para paquetes
 PACKAGES_CONFIG_FILE = Path("packages.json")
 
+# 📦 Configuración de Tareas Asíncronas 👈 ¡NUEVO!
+ASYNC_TASKS = {} 
+
 # ========================================================
 # 💾 FUNCIONES DE PERSISTENCIA
 # ========================================================
-# ... (load_state y save_state) ...
 
 def load_state():
     global functions, logs
@@ -104,16 +106,15 @@ def save_state():
 
 
 # ========================================================
-# 🟢 FUNCIÓN: Actualización y Reconstrucción del RootFS (MODIFICADA)
+# 🟢 FUNCIÓN: Actualización y Reconstrucción del RootFS
 # ========================================================
 
 def update_and_rebuild_rootfs(new_python_reqs=None, new_node_packages=None):
     """
     Lee, actualiza packages.json con nuevos requisitos, y reconstruye el rootfs.
-    Acepta requisitos de Python o paquetes de Node.js.
     """
     if not new_python_reqs and not new_node_packages:
-        return # No hay nada que hacer
+        return 
     
     print(f"⚠️  Actualizando configuración de paquetes...")
     
@@ -129,7 +130,6 @@ def update_and_rebuild_rootfs(new_python_reqs=None, new_node_packages=None):
         current_reqs_str = config.get("common_python_packages", "")
         current_reqs = set(current_reqs_str.split()) if current_reqs_str else set()
         
-        # Limpiar y obtener los requisitos nuevos (filtrando comentarios y versiones)
         new_req_list = [
             r.split('==')[0].split('<')[0].split('>')[0].strip()
             for r in new_python_reqs.splitlines() 
@@ -148,7 +148,6 @@ def update_and_rebuild_rootfs(new_python_reqs=None, new_node_packages=None):
         current_node_str = config.get("common_node_packages", "")
         current_node = set(current_node_str.split()) if current_node_str else set()
         
-        # Asumiendo que new_node_packages es un listado simple de paquetes, uno por línea
         new_node_list = [
             r.strip()
             for r in new_node_packages.splitlines() 
@@ -169,8 +168,6 @@ def update_and_rebuild_rootfs(new_python_reqs=None, new_node_packages=None):
         
         print("⏳ Iniciando reconstrucción del RootFS (utilizando --skip-download)...")
         try:
-            # Llama a build_rootfs_local.py con el argumento para saltar la descarga.
-            # Se requiere sudo para chroot.
             result = subprocess.run(
                 ["sudo", sys.executable, "build_rootfs_local.py", "--skip-download"], 
                 capture_output=True, text=True, check=True, timeout=600 
@@ -189,7 +186,7 @@ def update_and_rebuild_rootfs(new_python_reqs=None, new_node_packages=None):
 
 # ========================================================
 # 🛠️ FUNCIONES DE EJECUCIÓN CON CRUN 
-# ... (create_temp_config, build_c_function, run_in_container sin cambios)
+# ========================================================
 
 TEMP_CONFIG_FILES = {}
 
@@ -291,7 +288,114 @@ def run_in_container(command, mounts=None):
     return out, err, code
 
 # ========================================================
-# 🌐 ENDPOINT DE SUBIDA MODIFICADO
+# ⚙️ FUNCIONES DE EJECUCIÓN (Lógica extraída para DRY) 👈 ¡NUEVO!
+# ========================================================
+
+def _execute_function_logic(func_name, args, task_id, start_time_str):
+    """
+    Contiene la lógica central de ejecución dentro del contenedor. 
+    Devuelve el diccionario de entrada (log entry) o lanza una excepción.
+    """
+    func_data = functions[func_name]
+    abs_func_path = Path(func_data["file_path"])
+    file_ext = func_data["file_ext"]
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        os.chmod(tmpdir_path, 0o777) 
+        
+        temp_func_path = tmpdir_path / abs_func_path.name
+        shutil.copy(abs_func_path, temp_func_path)
+        os.chmod(temp_func_path, 0o755)
+
+        mounts = [(tmpdir_path.as_posix(), "/mnt")]
+        command = None
+
+        if file_ext == ".py":
+            python_command = ["python3", f"/mnt/{abs_func_path.name}"] + [str(a) for a in args]
+            command = [
+                "sh", "-c", 
+                f"PYTHONPATH=/usr/local/lib/python3.12/site-packages { ' '.join(python_command) }"
+            ]
+        elif file_ext == ".js":
+            command = ["node", f"/mnt/{abs_func_path.name}"] + [str(a) for a in args]
+        elif file_ext == ".c":
+            build_c_function(temp_func_path, temp_func_path)
+            executable_name = abs_func_path.stem
+            command = [f"/mnt/{executable_name}"] + [str(a) for a in args]
+        else:
+            raise ValueError(f"Extensión de archivo no soportada: {file_ext}")
+        
+        out, err, code = run_in_container(command, mounts)
+        
+        if code != 0:
+            raise Exception(f"Fallo de ejecución. Código de salida: {code}. Error: {err or out}")
+            
+        try:
+            result = json.loads(out)
+        except json.JSONDecodeError:
+            result = out 
+
+        e_time = time.time()
+        entry = {
+            "id": task_id, 
+            "args": args, 
+            "result": result, 
+            "status": "success",
+            "time_start": start_time_str,
+            "time_end": datetime.fromtimestamp(e_time).strftime("%Y-%m-%d %H:%M:%S.%f")
+        }
+        return entry
+
+
+def async_function_worker(task_id, func_name, args, start_time_str):
+    """
+    Ejecuta la lógica de la función en un hilo separado y almacena el resultado.
+    """
+    global logs, ASYNC_TASKS
+    
+    # Marcamos la tarea como en ejecución
+    ASYNC_TASKS[task_id]['status'] = 'running'
+
+    try:
+        entry = _execute_function_logic(func_name, args, task_id, start_time_str)
+        
+        # Actualizar ASYNC_TASKS
+        ASYNC_TASKS[task_id].update({
+            'status': 'completed',
+            'result': entry['result'],
+            'time_end': entry['time_end'],
+            'execution_log': entry
+        })
+            
+    except Exception as e:
+        e_time = time.time()
+        error_msg = str(e)
+        
+        entry = {
+            "id": task_id, 
+            "args": args, 
+            "error": error_msg, 
+            "status": "error",
+            "time_start": start_time_str,
+            "time_end": datetime.fromtimestamp(e_time).strftime("%Y-%m-%d %H:%M:%S.%f")
+        }
+        
+        # Actualizar ASYNC_TASKS
+        ASYNC_TASKS[task_id].update({
+            'status': 'failed',
+            'error': error_msg,
+            'time_end': entry['time_end'],
+            'execution_log': entry
+        })
+
+    # Guardar el registro de ejecución en el log global
+    logs.setdefault(func_name, []).append(entry)
+    save_state()
+
+
+# ========================================================
+# 🌐 ENDPOINT DE SUBIDA
 # ========================================================
 
 @app.route('/admin/upload', methods=['POST'])
@@ -363,7 +467,7 @@ def upload_function():
         functions[func_name] = {
             "name": func_name,
             "file_path": abs_func_path,
-            "file_ext": file_ext, # Usar la extensión ya calculada
+            "file_ext": file_ext, 
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "dependencies": dependency_file_name, 
         }
@@ -376,13 +480,117 @@ def upload_function():
         return jsonify({"status": "error", "message": f"Fallo en la carga de la función: {str(e)}"}), 500
 
 # ========================================================
+# 🌐 ENDPOINT DE EJECUCIÓN SÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# ========================================================
+
+@app.route('/function/sync/<func_name>', methods=['POST'])
+def execute_function_sync(func_name):
+    if func_name not in functions:
+        return jsonify({"status": "error", "message": f"Función no cargada: {func_name}"}), 404
+        
+    data = request.get_json(silent=True)
+    args = data.get('args', []) if data and isinstance(data, dict) else []
+    
+    s_time = time.time()
+    start_time_str = datetime.fromtimestamp(s_time).strftime("%Y-%m-%d %H:%M:%S.%f") 
+    task_id = str(uuid.uuid4()) # Usamos un ID único para el log
+
+    try:
+        # Llama a la lógica de ejecución síncrona
+        entry = _execute_function_logic(func_name, args, task_id, start_time_str)
+        
+    except Exception as e:
+        e_time = time.time()
+        entry = {
+            "id": task_id, 
+            "args": args, 
+            "error": str(e), 
+            "status": "error",
+            "time_start": start_time_str,
+            "time_end": datetime.fromtimestamp(e_time).strftime("%Y-%m-%d %H:%M:%S.%f")
+        }
+    
+    # Log y respuesta para ejecución síncrona
+    logs.setdefault(func_name, []).append(entry)
+    save_state()
+    
+    return jsonify(entry)
+
+# ========================================================
+# 🌐 ENDPOINT DE EJECUCIÓN ASÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# ========================================================
+
+@app.route('/function/async/<func_name>', methods=['POST'])
+def execute_function_async(func_name):
+    if func_name not in functions:
+        return jsonify({"status": "error", "message": f"Función no cargada: {func_name}"}), 404
+        
+    data = request.get_json(silent=True)
+    args = data.get('args', []) if data and isinstance(data, dict) else []
+    
+    s_time = time.time()
+    start_time_str = datetime.fromtimestamp(s_time).strftime("%Y-%m-%d %H:%M:%S.%f") 
+    task_id = str(uuid.uuid4())
+
+    # Inicializar el estado de la tarea
+    ASYNC_TASKS[task_id] = {
+        'task_id': task_id,
+        'function_name': func_name,
+        'status': 'queued',
+        'time_start': start_time_str,
+        'args': args
+    }
+    
+    # Iniciar el hilo de ejecución
+    thread = threading.Thread(
+        target=async_function_worker, 
+        args=(task_id, func_name, args, start_time_str)
+    )
+    thread.start()
+    
+    # Devolver la ID de la tarea inmediatamente
+    return jsonify({
+        "status": "queued",
+        "message": "Función iniciada en modo asíncrono.",
+        "task_id": task_id,
+        "check_status_url": f"/task/status/{task_id}"
+    }), 202
+
+
+# ========================================================
+# 🌐 ENDPOINT DE CONSULTA DE TAREA ASÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# ========================================================
+
+@app.route('/task/status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    if task_id not in ASYNC_TASKS:
+        return jsonify({"status": "error", "message": f"ID de tarea no encontrado: {task_id}"}), 404
+        
+    task_info = ASYNC_TASKS[task_id]
+    
+    if task_info['status'] in ['completed', 'failed']:
+        # Devolver el log de ejecución completo
+        response = task_info.get('execution_log', task_info)
+        # Opcional: del ASYNC_TASKS[task_id] para liberar memoria si la tarea es muy antigua
+        return jsonify(response)
+    else:
+        # Si está en cola o ejecutándose
+        return jsonify({
+            "task_id": task_id,
+            "function_name": task_info['function_name'],
+            "status": task_info['status'], # 'queued' o 'running'
+            "time_start": task_info['time_start'],
+            "message": f"Tarea en curso. Estado: {task_info['status']}"
+        })
+
+# ========================================================
 # 🌐 RESTO DE ENDPOINTS (ADMIN)
-# ... (list_functions, delete_function, get_server_status, get_function_logs sin cambios)
-# ...
+# ========================================================
 
 @app.route('/admin/gui')
 @requires_auth 
 def admin_gui():
+    # Asume que tienes un dashboard.html en la carpeta 'templates'
     return render_template('dashboard.html')
 
 
@@ -427,7 +635,8 @@ def get_server_status():
         "uptime": uptime_str,
         "cpu_percent": psutil.cpu_percent(interval=None),
         "ram_percent": psutil.virtual_memory().percent,
-        "loaded_functions": len(functions)
+        "loaded_functions": len(functions),
+        "async_tasks_running": len([t for t in ASYNC_TASKS.values() if t['status'] in ['queued', 'running']])
     }
     return jsonify(status_data)
 
@@ -441,99 +650,6 @@ def get_function_logs(func_name):
         return jsonify({"status": "error", "message": f"Logs no encontrados para: {func_name}"}), 404
 
 # ========================================================
-# 🌐 ENDPOINT DE EJECUCIÓN (SIN CACHÉ)
-# ... (core_execute_function sin cambios)
-# ...
-
-@app.route('/function/<func_name>', methods=['POST'])
-def core_execute_function(func_name):
-    if func_name not in functions:
-        return jsonify({"status": "error", "message": f"Función no cargada: {func_name}"}), 404
-        
-    data = request.get_json(silent=True)
-    args = data.get('args', []) if data and isinstance(data, dict) else []
-    
-    func_data = functions[func_name]
-    abs_func_path = Path(func_data["file_path"])
-    file_ext = func_data["file_ext"]
-
-    s_time = time.time()
-    start_time = datetime.fromtimestamp(s_time).strftime("%Y-%m-%d %H:%M:%S.%f") 
-    
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            os.chmod(tmpdir_path, 0o777) 
-            
-            # --- COPIA DEL CÓDIGO ---
-            temp_func_path = tmpdir_path / abs_func_path.name
-            shutil.copy(abs_func_path, temp_func_path)
-            os.chmod(temp_func_path, 0o755)
-
-            # Montajes base (solo queda el directorio temporal /mnt)
-            mounts = [
-                (tmpdir_path.as_posix(), "/mnt"), 
-            ]
-            
-            command = None
-
-            if file_ext == ".py":
-                # ASUMIMOS LIBRERÍAS PREINSTALADAS/ACTUALIZADAS EN EL ROOTFS
-                python_command = ["python3", f"/mnt/{abs_func_path.name}"] + [str(a) for a in args]
-                
-                command = [
-                    "sh", "-c", 
-                    f"PYTHONPATH=/usr/local/lib/python3.12/site-packages { ' '.join(python_command) }"
-                ]
-                
-            elif file_ext == ".js":
-                command = ["node", f"/mnt/{abs_func_path.name}"] + [str(a) for a in args]
-            elif file_ext == ".c":
-                build_c_function(temp_func_path, temp_func_path)
-                executable_name = abs_func_path.stem
-                command = [f"/mnt/{executable_name}"] + [str(a) for a in args]
-            else:
-                raise ValueError(f"Extensión de archivo no soportada: {file_ext}")
-            
-            # === Ejecución de la función ===
-            out, err, code = run_in_container(command, mounts)
-            
-            if code != 0:
-                raise Exception(f"Fallo de ejecución. Código de salida: {code}. Error: {err or out}")
-                
-            try:
-                result = json.loads(out)
-            except json.JSONDecodeError:
-                result = out 
-
-            e_time = time.time()
-            entry = {
-                "id": str(uuid.uuid4()), 
-                "args": args, 
-                "result": result, 
-                "status": "success",
-                "time_start": start_time,
-                "time_end": datetime.fromtimestamp(e_time).strftime("%Y-%m-%d %H:%M:%S.%f")
-            }
-
-    except Exception as e:
-        e_time = time.time()
-        
-        entry = {
-            "id": str(uuid.uuid4()), 
-            "args": args, 
-            "error": str(e), 
-            "status": "error",
-            "time_start": start_time,
-            "time_end": datetime.fromtimestamp(e_time).strftime("%Y-%m-%d %H:%M:%S.%f")
-        }
-
-    logs.setdefault(func_name, []).append(entry)
-    save_state()
-    
-    return jsonify(entry)
-
-# ========================================================
 # 🚀 MAIN
 # ========================================================
 if __name__ == "__main__":
@@ -545,6 +661,6 @@ if __name__ == "__main__":
         
     load_state() 
     
-    print("TinyFaaS V3.0 HTTP Server (Containerized & Rootless) iniciado en http://127.0.0.1:8080")
+    print("TinyFaaS V3.1 HTTP Server (Containerized & Threaded) iniciado en http://127.0.0.1:8080")
     
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
