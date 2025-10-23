@@ -15,7 +15,7 @@ from pathlib import Path
 import tempfile 
 import atexit 
 from dotenv import load_dotenv 
-import threading # 👈 ¡NUEVO! Para la ejecución asíncrona
+import threading 
 
 # Cargar variables de entorno si existe un archivo .env
 load_dotenv()
@@ -71,7 +71,7 @@ CRUN_BIN = shutil.which("crun") or "/usr/bin/crun"
 # 🟢 Archivo de configuración para paquetes
 PACKAGES_CONFIG_FILE = Path("packages.json")
 
-# 📦 Configuración de Tareas Asíncronas 👈 ¡NUEVO!
+# 📦 Configuración de Tareas Asíncronas 
 ASYNC_TASKS = {} 
 
 # ========================================================
@@ -93,6 +93,8 @@ def load_state():
         
 def save_state():
     try:
+        # Omitimos execution_log y otros campos grandes de ASYNC_TASKS si se guardara en persistencia,
+        # pero por ahora solo guardamos logs y funciones.
         functions_to_save = {k: {key: v for key, v in data.items()} 
                              for k, data in functions.items()}
                              
@@ -288,7 +290,7 @@ def run_in_container(command, mounts=None):
     return out, err, code
 
 # ========================================================
-# ⚙️ FUNCIONES DE EJECUCIÓN (Lógica extraída para DRY) 👈 ¡NUEVO!
+# ⚙️ FUNCIONES DE EJECUCIÓN (Lógica extraída para DRY) 
 # ========================================================
 
 def _execute_function_logic(func_name, args, task_id, start_time_str):
@@ -355,18 +357,20 @@ def async_function_worker(task_id, func_name, args, start_time_str):
     global logs, ASYNC_TASKS
     
     # Marcamos la tarea como en ejecución
-    ASYNC_TASKS[task_id]['status'] = 'running'
+    if task_id in ASYNC_TASKS:
+        ASYNC_TASKS[task_id]['status'] = 'running'
 
     try:
         entry = _execute_function_logic(func_name, args, task_id, start_time_str)
         
         # Actualizar ASYNC_TASKS
-        ASYNC_TASKS[task_id].update({
-            'status': 'completed',
-            'result': entry['result'],
-            'time_end': entry['time_end'],
-            'execution_log': entry
-        })
+        if task_id in ASYNC_TASKS:
+            ASYNC_TASKS[task_id].update({
+                'status': 'completed',
+                'result': entry['result'],
+                'time_end': entry['time_end'],
+                'execution_log': entry
+            })
             
     except Exception as e:
         e_time = time.time()
@@ -382,12 +386,13 @@ def async_function_worker(task_id, func_name, args, start_time_str):
         }
         
         # Actualizar ASYNC_TASKS
-        ASYNC_TASKS[task_id].update({
-            'status': 'failed',
-            'error': error_msg,
-            'time_end': entry['time_end'],
-            'execution_log': entry
-        })
+        if task_id in ASYNC_TASKS:
+            ASYNC_TASKS[task_id].update({
+                'status': 'failed',
+                'error': error_msg,
+                'time_end': entry['time_end'],
+                'execution_log': entry
+            })
 
     # Guardar el registro de ejecución en el log global
     logs.setdefault(func_name, []).append(entry)
@@ -480,7 +485,7 @@ def upload_function():
         return jsonify({"status": "error", "message": f"Fallo en la carga de la función: {str(e)}"}), 500
 
 # ========================================================
-# 🌐 ENDPOINT DE EJECUCIÓN SÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# 🌐 ENDPOINT DE EJECUCIÓN SÍNCRONA 
 # ========================================================
 
 @app.route('/function/sync/<func_name>', methods=['POST'])
@@ -517,7 +522,7 @@ def execute_function_sync(func_name):
     return jsonify(entry)
 
 # ========================================================
-# 🌐 ENDPOINT DE EJECUCIÓN ASÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# 🌐 ENDPOINT DE EJECUCIÓN ASÍNCRONA 
 # ========================================================
 
 @app.route('/function/async/<func_name>', methods=['POST'])
@@ -538,6 +543,7 @@ def execute_function_async(func_name):
         'function_name': func_name,
         'status': 'queued',
         'time_start': start_time_str,
+        'time_end': None, # Inicialmente nulo
         'args': args
     }
     
@@ -558,7 +564,7 @@ def execute_function_async(func_name):
 
 
 # ========================================================
-# 🌐 ENDPOINT DE CONSULTA DE TAREA ASÍNCRONA 👈 ¡NUEVO ENDPOINT!
+# 🌐 ENDPOINT DE CONSULTA DE TAREA ASÍNCRONA 
 # ========================================================
 
 @app.route('/task/status/<task_id>', methods=['GET'])
@@ -569,9 +575,12 @@ def get_task_status(task_id):
     task_info = ASYNC_TASKS[task_id]
     
     if task_info['status'] in ['completed', 'failed']:
-        # Devolver el log de ejecución completo
-        response = task_info.get('execution_log', task_info)
-        # Opcional: del ASYNC_TASKS[task_id] para liberar memoria si la tarea es muy antigua
+        # 🚀 CORRECCIÓN: Devolver el log de ejecución fusionado con el nombre de la función
+        response = task_info.get('execution_log', {}).copy()
+        # Aseguramos que el nombre de la función y el estado estén en el nivel superior
+        response['function_name'] = task_info['function_name']
+        response['status'] = task_info['status'] 
+        response['time_end'] = task_info.get('time_end') 
         return jsonify(response)
     else:
         # Si está en cola o ejecutándose
@@ -580,6 +589,7 @@ def get_task_status(task_id):
             "function_name": task_info['function_name'],
             "status": task_info['status'], # 'queued' o 'running'
             "time_start": task_info['time_start'],
+            'time_end': task_info.get('time_end'), # <--- ¡Este campo es clave!
             "message": f"Tarea en curso. Estado: {task_info['status']}"
         })
 
@@ -620,24 +630,93 @@ def delete_function(func_name):
     else:
         return jsonify({"status": "error", "message": f"Función no encontrada: {func_name}"}), 404
 
+# Nuevo Endpoint: Borrar todas las tareas
+@app.route('/admin/clear_tasks', methods=['POST'])
+@requires_auth
+def clear_all_async_tasks():
+    global ASYNC_TASKS
+    ASYNC_TASKS.clear() # Vacía completamente el registro en memoria
+    return jsonify({"status": "success", "message": "Todas las tareas asíncronas han sido borradas del panel de visualización."})
 
 @app.route('/admin/status', methods=['GET'])
-@requires_auth
 def get_server_status():
+    """
+    Devuelve información de estado del servidor.
+    Aplica una lógica de limpieza de tareas.
+    Devuelve métricas básicas si no hay autenticación, y métricas completas
+    (incluida la lista de tareas) si las credenciales son válidas.
+    """
+    global ASYNC_TASKS # Necesario para modificar el diccionario global
+
+    # 1. Obtener métricas básicas (siempre disponibles)
     uptime_seconds = time.time() - psutil.boot_time()
     days, remainder = divmod(uptime_seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s"
 
+    # --- LÓGICA DE LIMPIEZA DE TAREAS Y PREPARACIÓN DE LA LISTA ---
+    task_list_to_send = []
+    tasks_to_keep = {}
+    
+    # Ordenar por tiempo de inicio (para mantener las más recientes en el histórico)
+    # Usamos .get('time_start', '') para manejar tareas sin tiempo de inicio por si acaso.
+    sorted_task_ids = sorted(ASYNC_TASKS.keys(), key=lambda x: ASYNC_TASKS[x].get('time_start', ''), reverse=True)
+    
+    finished_count = 0
+    MAX_FINISHED_TASKS = 20
+    
+    for task_id in sorted_task_ids:
+        task = ASYNC_TASKS[task_id]
+        
+        # Preparamos la info limpia para la lista que podría enviarse al frontend (sin hilos ni logs completos)
+        task_info_clean = {
+            'task_id': task_id,
+            'function_name': task.get('function_name'),
+            'status': task.get('status'),
+            'time_start': task.get('time_start'),
+            'time_end': task.get('time_end'),
+            # Incluir args y result a partir del execution_log (si existe)
+            'args': task.get('args', task.get('execution_log', {}).get('args', [])), 
+            'result': task.get('execution_log', {}).get('result', {}) 
+        }
+        
+        # La lista a enviar siempre incluye todas las tareas, pero la limpieza decide cuáles persisten en memoria.
+        task_list_to_send.append(task_info_clean)
+
+        # Si está activa (en curso/en cola), la mantenemos en memoria.
+        if task['status'] in ['queued', 'running']:
+            tasks_to_keep[task_id] = task
+        # Si está finalizada, solo mantenemos las MAX_FINISHED_TASKS más recientes.
+        elif task['status'] in ['completed', 'failed']:
+            if finished_count < MAX_FINISHED_TASKS: 
+                 tasks_to_keep[task_id] = task
+                 finished_count += 1
+            # Si ya tenemos 20 finalizadas, la tarea antigua no se añade a tasks_to_keep y se descarta al final.
+        
+    ASYNC_TASKS = tasks_to_keep # Aplicar limpieza de tareas antiguas
+    # --------------------------------------------------------------------
+
+    # 2. Construir el estado base (siempre se devuelve)
     status_data = {
         "status": "ok",
         "uptime": uptime_str,
         "cpu_percent": psutil.cpu_percent(interval=None),
         "ram_percent": psutil.virtual_memory().percent,
         "loaded_functions": len(functions),
-        "async_tasks_running": len([t for t in ASYNC_TASKS.values() if t['status'] in ['queued', 'running']])
+        "async_tasks_running": len([t for t in ASYNC_TASKS.values() if t['status'] in ['queued', 'running']]),
     }
+    
+    # 3. Verificar autenticación para incluir la lista detallada de tareas
+    auth = request.authorization
+    is_authenticated = auth and check_auth(auth.username, auth.password)
+    
+    if is_authenticated:
+        # Si está autenticado, incluimos la lista de tareas ya filtrada y preparada
+        status_data["async_tasks_list"] = task_list_to_send
+        
+    
+        
     return jsonify(status_data)
 
 

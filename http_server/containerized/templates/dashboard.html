@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TinyFaaS Admin Dashboard</title>
     <style>
+        /* ESTILOS BASE */
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }
         .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }
         h1, h2 { color: #0056b3; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
-        .status-box { padding: 10px; margin-bottom: 20px; border-radius: 5px; background-color: #e6f7ff; border: 1px solid #b3e0ff; }
-        /* Estilos del Formulario de Adquisición mejorados */
         .form-group { margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
         .form-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #333; }
+        /* Se ajusta el width de los inputs para evitar conflictos al centrar el botón */
         input[type="text"], input[type="file"], button { padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #ccc; width: calc(100% - 10px); box-sizing: border-box; }
-        input[type="file"] { width: auto; } /* Archivos no necesitan 100% */
+        input[type="file"] { width: auto; }
         button { background-color: #007bff; color: white; cursor: pointer; border: none; margin-right: 5px; width: auto; }
         button:hover { background-color: #0056b3; }
         .btn-delete { background-color: #dc3545; }
@@ -21,12 +21,88 @@
         .btn-logs { background-color: #28a745; }
         .btn-logs:hover { background-color: #1e7e34; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        /* 🚀 CAMBIO CLAVE: Estilos para tabla más compacta y legible */
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 0.9em; }
         th { background-color: #f2f2f2; }
-        /* Estilos de la Consola */
+        
+        /* Estilos para el formulario en una sola fila (FLEXBOX) */
+        .form-row {
+            display: flex;
+            gap: 10px; /* Espacio entre los elementos de la fila */
+            margin-bottom: 15px;
+        }
+
+        .form-field {
+            flex-grow: 1; /* Ocupa el espacio disponible de manera uniforme */
+            min-width: 0; /* Permite que el contenido se encoja correctamente */
+        }
+        
+        /* Ajuste para que los inputs dentro de form-field ocupen el 100% de su contenedor */
+        .form-field input[type="text"],
+        .form-field input[type="file"] {
+            width: 100%;
+            margin: 0;
+            padding: 8px;
+        }
+
+        /* Estilo específico para el botón de despliegue (ID) */
+        #deploy-button {
+            width: 60%; 
+            max-width: 300px; 
+            font-size: 1em;
+            padding: 10px; 
+            background-color: #007bff;
+            margin: 20px auto 0; 
+            display: block; 
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); 
+        }
+        #deploy-button:hover {
+            background-color: #0056b3;
+        }
+
+        /* ESTILO MEJORADO: STATUS BOX (FLEX/CARDS) */
+        .status-box {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #e6f7ff;
+            border: 1px solid #b3e0ff;
+        }
+
+        .status-metric {
+            background-color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            flex-grow: 1;
+            min-width: 130px; 
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 0.8em;
+            color: #555;
+            margin-bottom: 3px;
+            display: block;
+        }
+
+        .metric-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #007bff;
+        }
+        
+        /* Colores para alertas de métricas */
+        .metric-value.good { color: #28a745; } 
+        .metric-value.warn { color: #ffc107; } 
+        .metric-value.danger { color: #dc3545; } 
+
+        /* ESTILOS DE TAREAS ASÍNCRONAS Y CONSOLA */
         #console-output {
             background-color: #1e1e1e;
-            color: #00ff41;
+            color: #cccccc;
             padding: 15px;
             height: 250px;
             overflow-y: scroll;
@@ -37,10 +113,42 @@
             border: 1px solid #333;
         }
         .console-entry { border-bottom: 1px solid #333; padding-bottom: 5px; margin-bottom: 5px; }
-        .console-entry.success { color: #00ff41; }
-        .console-entry.error { color: #ff3333; }
-        .console-entry.warning { color: #ffdd00; }
-        .console-entry.info { color: #cccccc; }
+
+        /* ESTILOS DE BOTONES MODIFICADOS */
+        .btn-async {
+            background-color: #ff8c00; 
+            color: white;
+        }
+        .btn-async:hover {
+            background-color: #cc7000; 
+        }
+
+        /* Botón icónico en la tabla de tareas */
+        .btn-icon {
+            padding: 5px 8px; 
+            width: auto;
+            font-size: 14px;
+            margin-left: 2px;
+            min-width: 30px; 
+        }
+        /* Botón de Borrar Todo */
+        .btn-delete-all {
+            background-color: #dc3545; 
+            margin-left: 15px;
+        }
+        .btn-delete-all:hover {
+            background-color: #c82333;
+        }
+        
+        /* CLASES DE COLOR PARA ESTADO */
+        .console-entry.info, strong.info { color: #cccccc; }
+        .console-entry.success, strong.success { color: #00ff41; }
+        .console-entry.error, strong.error { color: #ff3333; }
+        .console-entry.warning, strong.warning { color: #ffdd00; }
+        .console-entry.queued, strong.queued { color: #17a2b8; } 
+        .console-entry.running, strong.running { color: #ffc107; } 
+        .console-entry.completed, strong.completed { color: #00ff41; } 
+        .console-entry.failed, strong.failed { color: #ff3333; } 
     </style>
 </head>
 <body>
@@ -48,26 +156,35 @@
 <div class="container">
     <h1>Administración de TinyFaaS</h1>
 
-    <div class="status-box" id="server-status">Cargando estado...</div>
+    <div class="status-box" id="server-status-container">Cargando estado...</div>
 
     <h2>Desplegar Nueva Función</h2>
     <form id="upload-form">
-        <div class="form-group">
-            <label for="name">Nombre de la Función (Opcional):</label>
-            <input type="text" id="name" name="name" placeholder="ej. mi_funcion_calculadora" title="Si se deja vacío, se usa el nombre del archivo.">
-        </div>
+        <div class="form-row">
+            
+            <div class="form-group form-field">
+                <label for="name">📝 Nombre (Opcional):</label>
+                <input type="text" id="name" name="name" placeholder="ej. mi_funcion" title="Si se deja vacío, se usa el nombre del archivo.">
+                <small style="color: #6c757d;">Nombre de invocación único.</small>
+            </div>
 
-        <div class="form-group">
-            <label for="code">Archivo de Código (Obligatorio, debe tener 'def main(*args)'):</label>
-            <input type="file" id="code" name="code" accept=".py" required>
-        </div>
+            <div class="form-group form-field">
+                <label for="code">📂 Código (*.py, *.js, *.c):</label>
+                <input type="file" id="code" name="code" accept=".py, .js, .c" required>
+                <small style="color: #007bff;">Debe contener la función `main(*args)`.</small>
+            </div>
 
-        <div class="form-group">
-            <label for="requirements">Archivo de Requisitos (Opcional, requirements.txt):</label>
-            <input type="file" id="requirements" name="requirements" accept=".txt">
+            <div class="form-group form-field">
+                <label for="requirements">🔗 Dependencias (requirements.txt):</label>
+                <input type="file" id="requirements" name="requirements" accept=".txt, .json">
+                <small style="color: #6c757d;">Para reconstruir la imagen base.</small>
+            </div>
+            
         </div>
-
-        <button type="submit">Desplegar Función</button>
+        
+        <div style="text-align: center; margin-top: 10px;">
+             <button type="submit" id="deploy-button">🚀 Desplegar Función</button>
+        </div>
     </form>
 
     <h2>Funciones Desplegadas</h2>
@@ -83,6 +200,25 @@
             </tbody>
     </table>
 
+    <h2 style="margin-top: 40px;">Monitor de Tareas Asíncronas</h2>
+    <div>
+        <button onclick="listAsyncTasks()">Recargar Tareas</button>
+        <button onclick="clearAllAsyncTasks()" class="btn-delete-all">🗑️ Borrar Todas las Tareas</button>
+    </div>
+    <table id="tasks-table">
+        <thead>
+            <tr>
+                <th>ID Tarea</th>
+                <th>Función</th>
+                <th>Estado</th>
+                <th>Tiempo Inicio</th>
+                <th>Tiempo Fin</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody id="async-tasks-list">
+        </tbody>
+    </table>
     <h2 style="margin-top: 40px;">Consola de Operaciones</h2>
     <div id="console-output">
         Listo para operar.
@@ -100,19 +236,22 @@
     document.addEventListener('DOMContentLoaded', () => {
          getServerStatus();
         listFunctions();
+        listAsyncTasks(); 
         document.getElementById('upload-form').addEventListener('submit', handleUpload);
         
-        // 🚀 INICIO DE LA ACTUALIZACIÓN AUTOMÁTICA DEL ESTADO DEL SERVIDOR 🚀
-        // 5 minutos = 300,000 milisegundos
-        const intervalTimeMs = 5 * 60 * 1000; 
-        
-        console.log(`[INFO] La actualización automática del estado del servidor (CPU/RAM/Uptime) está activa cada ${intervalTimeMs / 1000 / 60} minutos.`);
-        
-        setInterval(getServerStatus, intervalTimeMs);
+        // Intervalo de actualización del estado del servidor (5 minutos)
+        const serverIntervalMs = 5 * 60 * 1000; 
+        console.log(`[INFO] La actualización automática del estado del servidor está activa cada ${serverIntervalMs / 1000 / 60} minutos.`);
+        setInterval(getServerStatus, serverIntervalMs);
+
+        // Intervalo de actualización del monitor de tareas (cada 30 segundos)
+        const taskIntervalMs = 30000; 
+        console.log(`[INFO] El monitor de tareas asíncronas se actualizará automáticamente cada ${taskIntervalMs / 1000} segundos.`);
+        setInterval(listAsyncTasks, taskIntervalMs); 
     });
     
     // =======================================================
-    // CONSOLA: Muestra mensajes de operación en el HTML
+    // CONSOLA
     // =======================================================
     function logToConsole(message, type = 'info', funcName = '', operation = '') { 
         const timestamp = new Date().toLocaleTimeString();
@@ -122,13 +261,11 @@
         const namePrefix = funcName ? `[${funcName}] ` : '';
         const opPrefix = operation ? `<${operation}> ` : ''; 
         
-        // Formatear el mensaje como JSON indentado si es un objeto
         const logMessage = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
         
         entry.textContent = `[${timestamp}] ${opPrefix}${namePrefix}${logMessage}`; 
         
         consoleOutput.prepend(entry); 
-        // Limitar el tamaño de la consola
         while (consoleOutput.children.length > 100) {
             consoleOutput.removeChild(consoleOutput.lastChild);
         }
@@ -144,26 +281,53 @@
         })
         .then(response => response.json())
         .then(data => {
-            const statusBox = document.getElementById('server-status');
-            statusBox.innerHTML = `
-                Estado del Servidor: <strong>${data.status.toUpperCase()}</strong> | 
-                Uptime: ${data.uptime} | 
-                CPU: ${data.cpu_percent}% | 
-                RAM: <strong>${data.ram_percent}%</strong> | 
-                Funciones Cargadas: <strong>${data.loaded_functions}</strong>
+            const statusContainer = document.getElementById('server-status-container');
+            
+            // Determinar clases de color para métricas
+            const cpuClass = data.cpu_percent > 80 ? 'danger' : data.cpu_percent > 50 ? 'warn' : 'good';
+            const ramClass = data.ram_percent > 85 ? 'danger' : data.ram_percent > 60 ? 'warn' : 'good';
+
+            // Rellenar el contenedor con las cards de métricas
+            statusContainer.innerHTML = `
+                <div class="status-metric">
+                    <span class="metric-label">Estado del Servidor</span>
+                    <span class="metric-value ${data.status === 'ok' ? 'good' : 'danger'}">${data.status.toUpperCase()}</span>
+                </div>
+                <div class="status-metric">
+                    <span class="metric-label">CPU (Uso)</span>
+                    <span class="metric-value ${cpuClass}">${data.cpu_percent}%</span>
+                </div>
+                <div class="status-metric">
+                    <span class="metric-label">RAM (Uso)</span>
+                    <span class="metric-value ${ramClass}">${data.ram_percent}%</span>
+                </div>
+                <div class="status-metric">
+                    <span class="metric-label">Uptime</span>
+                    <span class="metric-value">${data.uptime}</span>
+                </div>
+                <div class="status-metric">
+                    <span class="metric-label">Funciones Cargadas</span>
+                    <span class="metric-value">${data.loaded_functions}</span>
+                </div>
+                <div class="status-metric">
+                    <span class="metric-label">Tareas Activas</span>
+                    <span class="metric-value">${data.async_tasks_running || 0}</span>
+                </div>
             `;
-            statusBox.style.backgroundColor = data.status === 'ok' ? '#e6f7ff' : '#fff0f6';
+            
+            statusContainer.style.backgroundColor = data.status === 'ok' ? '#e6f7ff' : '#fff0f6';
             logToConsole(`Estado del servidor actualizado: CPU ${data.cpu_percent}%, RAM ${data.ram_percent}%`, 'info', '', 'SERVER_STATUS_OK');
         })
         .catch(error => {
             logToConsole('Error al obtener estado del servidor. Revise la conexión.', 'error', '', 'SERVER_STATUS_ERROR');
-            document.getElementById('server-status').textContent = 'Error al conectar con el servidor.';
+            document.getElementById('server-status-container').innerHTML = 'Error al conectar con el servidor.';
         });
     }
 
     // =======================================================
-    // 2. DESPLIEGUE DE FUNCIONES (Upload)
+    // 2. DESPLIEGUE, LISTADO, ELIMINACIÓN e INVOCACIÓN
     // =======================================================
+
     function handleUpload(event) {
         event.preventDefault();
         
@@ -194,9 +358,6 @@
         });
     }
 
-    // =======================================================
-    // 3. LISTADO, ELIMINACIÓN e INVOCACIÓN
-    // =======================================================
     function listFunctions() {
         fetch('/admin/functions', {
             headers: { 'Authorization': authHeader }
@@ -215,12 +376,20 @@
                 
                 const actionsCell = row.insertCell();
 
-                // Botón Invocar
-                const invokeBtn = document.createElement('button');
-                invokeBtn.textContent = 'Invocar (POST)';
-                invokeBtn.title = 'Requiere enviar JSON con {"args": [...]}';
-                invokeBtn.onclick = () => invokeFunction(name);
-                actionsCell.appendChild(invokeBtn);
+                // Botón Invocar SINCRONO
+                const invokeSyncBtn = document.createElement('button');
+                invokeSyncBtn.textContent = 'Invocar (SYNC)';
+                invokeSyncBtn.title = 'Ejecución síncrona (espera resultado).';
+                invokeSyncBtn.onclick = () => promptInvoke(name, 'sync');
+                actionsCell.appendChild(invokeSyncBtn);
+
+                // Botón Invocar ASÍNCRONO
+                const invokeAsyncBtn = document.createElement('button');
+                invokeAsyncBtn.textContent = 'Invocar (ASYNC)';
+                invokeAsyncBtn.className = 'btn-async'; 
+                invokeAsyncBtn.title = 'Ejecución asíncrona (devuelve ID de tarea).';
+                invokeAsyncBtn.onclick = () => promptInvoke(name, 'async');
+                actionsCell.appendChild(invokeAsyncBtn);
                 
                 // Botón Ver Logs
                 const logsBtn = document.createElement('button');
@@ -254,6 +423,7 @@
                 logToConsole(`Función ${funcName} eliminada con éxito.`, 'success', funcName, 'DELETE_RESULT');
                 listFunctions(); 
                 getServerStatus();
+                listAsyncTasks(); 
             } else {
                 return response.json().then(data => {
                     logToConsole(`Error al eliminar: ${data.message || response.statusText}`, 'error', funcName, 'DELETE_ERROR');
@@ -263,21 +433,33 @@
         .catch(error => logToConsole(`Error de conexión al eliminar: ${error.message}`, 'error', funcName, 'DELETE_ERROR'));
     }
     
-    // Función de invocación (CORREGIDA PARA ALERTA)
-    function invokeFunction(funcName) {
-        const argsInput = prompt(`Introduce los argumentos para ${funcName} (separados por comas, ej: 10,20,"hola"):`);
+    function promptInvoke(funcName, mode) { 
+        const argsInput = prompt(`Invocar ${funcName} en modo ${mode.toUpperCase()}.\nIngresa los argumentos como array JSON:\nEj: [10, 5, "test"]`, '[]');
         if (argsInput === null) return;
 
-        const argsArray = argsInput.split(',').map(s => s.trim()).filter(s => s.length > 0);
+        let processedArgs = [];
+        try {
+            processedArgs = JSON.parse(argsInput);
+            if (!Array.isArray(processedArgs)) {
+                throw new Error("El input no es un array JSON válido.");
+            }
+        } catch (e) {
+            logToConsole(`Error al parsear JSON de argumentos: ${e.message}`, 'error', funcName, 'INVOKE_ERROR');
+            alert(`Error de formato en los argumentos: ${e.message}`);
+            return;
+        }
         
-        const processedArgs = argsArray.map(arg => {
-            const num = Number(arg);
-            return isNaN(num) ? arg.replace(/^["']|["']$/g, '') : num;
-        });
-        
-        logToConsole({ action: "Invocando", args: processedArgs }, 'info', funcName, 'INVOKE'); 
+        logToConsole({ action: `Invocando (${mode.toUpperCase()})`, args: processedArgs }, 'info', funcName, 'INVOKE'); 
 
-        fetch(`/function/${funcName}`, {
+        if (mode === 'sync') {
+            invokeFunctionSync(funcName, processedArgs);
+        } else if (mode === 'async') {
+            invokeFunctionAsync(funcName, processedArgs);
+        }
+    }
+
+    function invokeFunctionSync(funcName, processedArgs) {
+        fetch(`/function/sync/${funcName}`, {
             method: 'POST',
             headers: {
                 'Authorization': authHeader,
@@ -289,19 +471,180 @@
         .then(data => {
             let logType = data.status === 'success' ? 'success' : 'error';
             
-            // 🚀 CORRECCIÓN CLAVE: Mostrar la respuesta completa de la API en la alerta.
-            alert(`Respuesta completa de la API para ${funcName}:\n\n` + JSON.stringify(data, null, 2));
+            alert(`Respuesta de la API para ${funcName} (SYNC):\n\n` + JSON.stringify(data, null, 2));
 
-            logToConsole(data, logType, funcName, 'INVOKE_RESULT'); 
+            logToConsole(data, logType, funcName, 'INVOKE_SYNC_RESULT'); 
         })
         .catch(error => {
-            logToConsole(`Error de conexión al invocar: ${error.message}`, 'error', funcName, 'INVOKE_ERROR');
-            alert('Error al invocar la función. Revisa la consola y la conexión.');
+            logToConsole(`Error de conexión al invocar: ${error.message}`, 'error', funcName, 'INVOKE_SYNC_ERROR');
+            alert('Error al invocar la función de forma síncrona. Revisa la consola y la conexión.');
+        });
+    }
+
+    function invokeFunctionAsync(funcName, processedArgs) {
+        fetch(`/function/async/${funcName}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ args: processedArgs })
+        })
+        .then(response => response.json())
+        .then(data => {
+            let logType = data.status === 'queued' ? 'queued' : 'info'; 
+            
+            alert(`Respuesta de la API para ${funcName} (ASYNC):\n\nTarea en cola. ID: ${data.task_id}\nURL de Estado: ${data.check_status_url}\n\nNota: La ejecución se realiza en segundo plano.`);
+
+            logToConsole(data, logType, funcName, 'INVOKE_ASYNC_QUEUED'); 
+            
+            listAsyncTasks();
+        })
+        .catch(error => {
+            logToConsole(`Error de conexión al invocar asíncrono: ${error.message}`, 'error', funcName, 'INVOKE_ASYNC_ERROR');
+            alert('Error al iniciar la función asíncrona. Revisa la consola y la conexión.');
         });
     }
 
     // =======================================================
-    // 4. FUNCIÓN PARA MOSTRAR LOGS (CORREGIDA PARA ALERTA)
+    // 3. MONITORIZACIÓN DE TAREAS ASÍNCRONAS
+    // =======================================================
+
+    function listAsyncTasks() {
+        fetch('/admin/status', { 
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => response.json())
+        .then(data => {
+            const taskListBody = document.getElementById('async-tasks-list');
+            taskListBody.innerHTML = '';
+            
+            const tasks = data.async_tasks_list || []; 
+            logToConsole(`Tareas asíncronas cargadas: ${tasks.length} tareas.`, 'info', '', 'TASK_LIST_FETCH');
+
+            getServerStatus(); 
+
+            if (tasks.length === 0) {
+                const row = taskListBody.insertRow();
+                // Aumentamos el colspan a 6 (antes 5) por la nueva columna
+                row.insertCell(0).colSpan = 6; 
+                row.cells[0].textContent = 'No hay tareas asíncronas activas o registradas.';
+                return;
+            }
+
+            tasks.forEach(task => {
+                const row = taskListBody.insertRow();
+                const statusClass = task.status; 
+                
+                // Muestra el ID completo
+                row.insertCell().textContent = task.task_id; 
+                row.insertCell().textContent = task.function_name;
+                
+                const statusCell = row.insertCell();
+                statusCell.innerHTML = `<strong class="${statusClass}">${task.status.toUpperCase()}</strong>`;
+                
+                row.insertCell().textContent = task.time_start || 'N/A';
+                
+                // 🚀 CAMBIO CLAVE: Celdas para el tiempo de fin
+                const timeEndCell = row.insertCell();
+                timeEndCell.textContent = task.time_end || (task.status === 'running' ? 'En curso...' : 'N/A');
+                
+                const actionsCell = row.insertCell();
+
+                // Botón icónico de Actualizar Estado
+                const checkStatusBtn = document.createElement('button');
+                checkStatusBtn.textContent = '🔄'; // Icono de refresh
+                checkStatusBtn.className = 'btn-icon'; // Nueva clase para tamaño
+                checkStatusBtn.title = 'Actualizar Estado';
+                checkStatusBtn.onclick = () => checkTaskStatus(task.task_id, true);
+                actionsCell.appendChild(checkStatusBtn);
+
+                // Botón icónico para ver el resultado
+                if (task.status === 'completed' || task.status === 'failed') {
+                    const resultBtn = document.createElement('button');
+                    resultBtn.textContent = '👁️'; // Icono de ojo/visualización
+                    resultBtn.className = (task.status === 'completed' ? 'btn-logs' : 'btn-delete') + ' btn-icon';
+                    resultBtn.title = 'Ver Resultado';
+                    resultBtn.onclick = () => checkTaskStatus(task.task_id, true); 
+                    actionsCell.appendChild(resultBtn);
+                }
+            });
+        })
+        .catch(error => logToConsole(`Error al listar tareas asíncronas: ${error.message}`, 'error', '', 'TASK_LIST_ERROR'));
+    }
+
+    function checkTaskStatus(taskId, forceAlert = false) {
+        fetch(`/task/status/${taskId}`, {
+            method: 'GET',
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'running' || data.status === 'queued') {
+                logToConsole(`Estado de tarea ${taskId}: ${data.status}.`, data.status, data.function_name, 'TASK_STATUS');
+                if (forceAlert) {
+                     alert(`Estado de la Tarea ${taskId}:\n\nEstado: ${data.status.toUpperCase()}\n\nNota: La ejecución aún no ha finalizado. Presione "Recargar Tareas" o espere un momento.`);
+                }
+            } else if (data.status === 'completed' || data.status === 'failed') {
+                const logType = data.status; 
+                logToConsole(`Tarea ${taskId} FINALIZADA con estado ${data.status}.`, logType, data.function_name, 'TASK_COMPLETED');
+                
+                // Resaltar el resultado/error
+                let keyInfo;
+                if (data.status === 'completed') {
+                    keyInfo = `✅ RESULTADO: \n${JSON.stringify(data.result, null, 2)}`;
+                } else {
+                    keyInfo = `❌ ERROR: \n${data.error}`;
+                }
+                
+                alert(`📋 **Resultado Final de Tarea Asíncrona**\n\n` + 
+                      `Función: ${data.function_name}\n` +
+                      `Estado: ${data.status.toUpperCase()}\n` +
+                      `ID Tarea: ${taskId}\n` +
+                      `Tiempo Inicio: ${data.time_start || 'N/A'}\n` +
+                      `Tiempo Fin: ${data.time_end || 'N/A'}\n\n` + // 🚀 Añadido al alerta
+                      `---------------------------\n` +
+                      keyInfo);
+                
+                listFunctions(); 
+                listAsyncTasks(); 
+            } else {
+                 logToConsole(`Estado de tarea ${taskId}: desconocido.`, 'warning', data.function_name, 'TASK_STATUS_UNKNOWN');
+            }
+            
+            if (forceAlert) {
+                 listAsyncTasks(); 
+            }
+        })
+        .catch(error => {
+            logToConsole(`Error al comprobar el estado de la tarea ${taskId}: ${error.message}`, 'error', '', 'TASK_STATUS_ERROR');
+        });
+    }
+
+    // Borrar todas las tareas del panel
+    function clearAllAsyncTasks() {
+        if (!confirm("¿Está seguro de que desea borrar TODAS las tareas asíncronas del panel de visualización? (Esto borrará el registro de tareas en memoria)")) {
+            return;
+        }
+
+        fetch('/admin/clear_tasks', {
+            method: 'POST',
+            headers: { 'Authorization': authHeader }
+        })
+        .then(response => response.json().then(data => {
+            if (response.ok) {
+                logToConsole(data.message, 'success', '', 'TASK_CLEAR_ALL');
+                listAsyncTasks(); 
+                getServerStatus();
+            } else {
+                throw new Error(data.message || 'Error al borrar tareas.');
+            }
+        }))
+        .catch(error => logToConsole(`Fallo al borrar tareas: ${error.message}`, 'error', '', 'TASK_CLEAR_ERROR'));
+    }
+
+    // =======================================================
+    // 4. FUNCIÓN PARA MOSTRAR LOGS
     // =======================================================
 
     function showLogs(funcName) {
@@ -342,17 +685,14 @@
         logToConsole(`Logs recibidos (${recentLogs.length} recientes)`, 'info', funcName, 'LOGS_RESULT');
 
         recentLogs.forEach((entry, index) => {
-            // 🚀 CORRECCIÓN CLAVE: Construir la alerta con el objeto completo (entry) de la API.
             logContent += `--- Ejecución #${logs.length - recentLogs.length + index + 1} ---\n`;
             logContent += JSON.stringify(entry, null, 2);
             logContent += '\n\n';
 
-            // Log a la consola (mantiene el formato JSON indentado)
             const logType = entry.status === 'success' ? 'success' : 'error';
             logToConsole(entry, logType, funcName, 'LOG_ENTRY'); 
         });
 
-        // 🚀 CORRECCIÓN FINAL: Mostrar el contenido sin más procesamiento.
         alert(logContent);
     }
 </script>

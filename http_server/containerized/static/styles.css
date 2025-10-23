@@ -108,3 +108,14 @@ th {
 .delete-btn:hover {
     background-color: #c82333;
 }
+
+/* Nuevo estilo para los botones de invocación asíncrona */
+.btn-async {
+    background-color: #ff8c00; /* Naranja oscuro (Dark Orange) */
+    color: white;
+    margin-left: 5px;
+}
+
+.btn-async:hover {
+    background-color: #cc7000; /* Naranja más oscuro al pasar el ratón */
+}
